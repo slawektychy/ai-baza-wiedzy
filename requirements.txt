@@ -1,6 +1,5 @@
 streamlit
 openai
-langchain
-PyMuPDF
-faiss-cpu
-
+langchain==0.1.14
+PyMuPDF==1.23.21
+faiss-cpu==1.7.4
