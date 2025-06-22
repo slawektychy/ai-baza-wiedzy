@@ -1,71 +1,49 @@
-# app.py
 import streamlit as st
-import os
-import hashlib
-import tempfile
-import openai
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.chains.question_answering import load_qa_chain
 from langchain.chat_models import ChatOpenAI
-from langchain.chains import RetrievalQA
-from langchain.document_loaders import PyMuPDFLoader
+import tempfile
+import os
 
 st.set_page_config(page_title="AI Baza Wiedzy", layout="wide")
 
 st.title("📚 AI Baza Wiedzy dla Twojej firmy")
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+st.markdown("Wgraj plik PDF i zadawaj pytania do jego treści.")
 
-UPLOAD_DIR = "uploaded_docs"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# Wybór i wczytanie pliku PDF
+uploaded_file = st.file_uploader("Wgraj dokument PDF", type="pdf")
 
-if "vectordb" not in st.session_state:
-    st.session_state.vectordb = None
+if uploaded_file:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(uploaded_file.read())
+        tmppath = tmp.name
 
-# Upload PDF i przetwarzanie
-with st.sidebar:
-    st.header("📄 Wgraj dokument")
-    uploaded_file = st.file_uploader("PDF z dokumentacją", type="pdf")
+    try:
+        loader = PyPDFLoader(tmppath)
+        documents = loader.load()
 
-    if uploaded_file:
-        file_bytes = uploaded_file.read()
-        file_hash = hashlib.md5(file_bytes).hexdigest()
-        save_path = os.path.join(UPLOAD_DIR, file_hash + ".pdf")
+        # Dziel tekst na fragmenty
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        docs = splitter.split_documents(documents)
 
-        if not os.path.exists(save_path):
-            with open(save_path, "wb") as f:
-                f.write(file_bytes)
+        # Utwórz wektorową bazę danych
+        embeddings = OpenAIEmbeddings()
+        db = FAISS.from_documents(docs, embeddings)
 
-            # Przetwarzanie PDF → tekst → embeddingi
-            with tempfile.TemporaryDirectory() as tmpdir:
-                tmppath = os.path.join(tmpdir, "tmp.pdf")
-                with open(tmppath, "wb") as f:
-                    f.write(file_bytes)
-                loader = PyMuPDFLoader(tmppath)
-                documents = loader.load()
-                splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=200)
-                chunks = splitter.split_documents(documents)
+        # Interfejs zadawania pytań
+        st.success("📄 Plik załadowany i przetworzony.")
+        query = st.text_input("Zadaj pytanie dotyczące dokumentu:")
 
-                embed = OpenAIEmbeddings()
-                vectordb = FAISS.from_documents(chunks, embed)
+        if query:
+            chain = load_qa_chain(ChatOpenAI(model_name="gpt-4", temperature=0), chain_type="stuff")
+            matching_docs = db.similarity_search(query)
+            answer = chain.run(input_documents=matching_docs, question=query)
+            st.markdown("### 📌 Odpowiedź:")
+            st.write(answer)
 
-                if st.session_state.vectordb:
-                    st.session_state.vectordb.merge_from(vectordb)
-                else:
-                    st.session_state.vectordb = vectordb
+    except Exception as e:
+        st.error(f"❌ Błąd przy analizie pliku: {e}")
 
-            st.success("✅ Dokument został dodany do bazy wiedzy!")
-        else:
-            st.info("⚠️ Ten dokument został już wcześniej załadowany.")
-
-# Czat
-st.subheader("💬 Zadaj pytanie dotyczące dokumentów")
-
-query = st.text_input("Twoje pytanie:", placeholder="np. Jak wystawić fakturę w Enova?")
-if query and st.session_state.vectordb:
-    llm = ChatOpenAI(model_name="gpt-4o")
-    qa = RetrievalQA.from_chain_type(llm=llm, retriever=st.session_state.vectordb.as_retriever())
-    response = qa.run(query)
-    st.write(response)
-elif query:
-    st.warning("📂 Najpierw wgraj przynajmniej jeden dokument PDF.")
