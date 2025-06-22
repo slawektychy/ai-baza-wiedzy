@@ -1,0 +1,6 @@
+streamlit
+openai
+langchain
+PyMuPDF
+faiss-cpu
+
